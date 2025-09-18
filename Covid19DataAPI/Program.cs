@@ -30,27 +30,26 @@ builder.Services.AddControllers()
         .OrderBy()
         .Expand()
         .Count()
-        .SetMaxTop(1000));
+        .SetMaxTop(1000)
+        .EnableQueryFeatures());
 
 // In-memory database for OData compatibility
 builder.Services.AddDbContext<CovidDbContext>(options =>
     options.UseInMemoryDatabase("CovidDB"));
 
 // Register services
-builder.Services.AddSingleton<CovidDataImporter>();
+builder.Services.AddScoped<CovidDataImporter>();
 builder.Services.AddHttpClient();
 
 // Add CORS
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowAll",
-        builder =>
-        {
-            builder
-                .AllowAnyOrigin()
-                .AllowAnyMethod()
-                .AllowAnyHeader();
-        });
+    options.AddPolicy("AllowAll", policy =>
+    {
+        policy.AllowAnyOrigin()
+              .AllowAnyMethod()
+              .AllowAnyHeader();
+    });
 });
 
 builder.Services.AddEndpointsApiExplorer();
@@ -63,81 +62,91 @@ builder.Services.AddSwaggerGen(c =>
         Description = "Complete COVID-19 API with configurable CSV import from GitHub and full OData support"
     });
 
-    // Fix Swagger conflict by resolving conflicting actions
     c.ResolveConflictingActions(apiDescriptions => apiDescriptions.First());
-
-    // Document both API and OData routes differently
-    c.DocInclusionPredicate((docName, description) =>
-    {
-        // Include regular API routes
-        if (description.RelativePath?.StartsWith("api/") == true)
-            return true;
-
-        // Include OData routes but mark them differently
-        if (description.RelativePath?.StartsWith("odata/") == true)
-            return true;
-
-        return false;
-    });
 });
 
 var app = builder.Build();
 
 // Configure pipeline
-app.UseSwagger();
-app.UseSwaggerUI(c =>
+if (app.Environment.IsDevelopment())
 {
-    c.SwaggerEndpoint("/swagger/v1/swagger.json", "COVID-19 API");
-    c.RoutePrefix = "";
-    c.DocumentTitle = "COVID-19 API Documentation";
-});
+    app.UseSwagger();
+    app.UseSwaggerUI(c =>
+    {
+        c.SwaggerEndpoint("/swagger/v1/swagger.json", "COVID-19 API");
+        c.RoutePrefix = "";
+    });
+}
 
 app.UseCors("AllowAll");
 app.UseRouting();
 app.UseAuthorization();
 app.MapControllers();
 
-// Auto-import data on startup if configured
+// Seed database with imported data for OData
 using (var scope = app.Services.CreateScope())
 {
-    var config = scope.ServiceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<ImportSettings>>();
-    if (config.Value.AutoImportOnStartup)
+    try
     {
-        try
+        var context = scope.ServiceProvider.GetRequiredService<CovidDbContext>();
+        var importer = scope.ServiceProvider.GetRequiredService<CovidDataImporter>();
+
+        // Import CSV data first
+        var success = await importer.ImportAllDataAsync();
+
+        if (success)
         {
-            var importer = scope.ServiceProvider.GetRequiredService<CovidDataImporter>();
-            var success = await importer.ImportAllDataAsync();
-            Console.WriteLine(success ? "? COVID-19 data imported successfully on startup!" : "? Data import failed - check logs");
+            // Populate EF context for OData
+            var countries = CovidDataImporter.GetCountries();
+            var cases = CovidDataImporter.GetCovidCases(0, int.MaxValue);
+
+            context.Countries.AddRange(countries);
+            context.CovidCases.AddRange(cases);
+            await context.SaveChangesAsync();
+
+            Console.WriteLine($"? Data imported: {countries.Count} countries, {cases.Count} cases");
         }
-        catch (Exception ex)
+        else
         {
-            Console.WriteLine($"? Auto-import failed: {ex.Message}");
+            Console.WriteLine("? Data import failed");
         }
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"? Setup failed: {ex.Message}");
     }
 }
 
 Console.WriteLine("=".PadRight(70, '='));
-Console.WriteLine("COVID-19 API with Real CSV Import & OData");
+Console.WriteLine("COVID-19 API with OData Support");
 Console.WriteLine("=".PadRight(70, '='));
 Console.WriteLine($"Swagger UI: http://localhost:5129");
-Console.WriteLine($"REST API: http://localhost:5129/api/");
-Console.WriteLine($"OData API: http://localhost:5129/odata/");
 Console.WriteLine($"OData Metadata: http://localhost:5129/odata/$metadata");
+Console.WriteLine($"Countries: http://localhost:5129/odata/Countries");
+Console.WriteLine($"Covid Cases: http://localhost:5129/odata/CovidCases");
 Console.WriteLine("=".PadRight(70, '='));
-Console.WriteLine("API Examples:");
-Console.WriteLine("REST: GET /api/countries");
-Console.WriteLine("OData: GET /odata/Countries?$filter=Region eq 'Asia'");
-Console.WriteLine("OData: GET /odata/CovidCases?$orderby=Confirmed desc&$top=10");
-Console.WriteLine("Manual Import: POST /api/covidcases/import");
+Console.WriteLine("OData Examples:");
+Console.WriteLine("GET /odata/Countries?$filter=Region eq 'Asia'");
+Console.WriteLine("GET /odata/CovidCases?$orderby=Confirmed desc&$top=10");
+Console.WriteLine("GET /odata/CovidCases?$expand=Country");
 Console.WriteLine("=".PadRight(70, '='));
 
 app.Run();
 
-// OData EDM Model configuration
 static IEdmModel GetEdmModel()
 {
     var builder = new ODataConventionModelBuilder();
-    builder.EntitySet<Country>("Countries");
-    builder.EntitySet<CovidCase>("CovidCases");
+
+    // Configure Countries entity set
+    var countries = builder.EntitySet<Country>("Countries");
+    countries.EntityType.HasKey(c => c.Id);
+
+    // Configure CovidCases entity set  
+    var covidCases = builder.EntitySet<CovidCase>("CovidCases");
+    covidCases.EntityType.HasKey(c => c.Id);
+
+    // Configure relationship
+    covidCases.EntityType.HasRequired(c => c.Country);
+
     return builder.GetEdmModel();
 }
