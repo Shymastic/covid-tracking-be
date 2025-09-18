@@ -1,10 +1,11 @@
 ﻿using System.ComponentModel.DataAnnotations;
+using System.Text.Json.Serialization;
 
 namespace Covid19DataAPI.Models
 {
     public class CovidCase
     {
-        public long Id { get; set; }  // Changed to long to match database
+        public long Id { get; set; }
 
         public int CountryId { get; set; }
 
@@ -19,11 +20,11 @@ namespace Covid19DataAPI.Models
 
         public long Active { get; set; }
 
-        public long DailyConfirmed { get; set; }  // Changed to long
+        public long DailyConfirmed { get; set; }
 
-        public long DailyDeaths { get; set; }     // Changed to long
+        public long DailyDeaths { get; set; }
 
         // Navigation property
-        public virtual Country? Country { get; set; }
+        public Country? Country { get; set; }
     }
 }

@@ -1,4 +1,5 @@
 ﻿using System.ComponentModel.DataAnnotations;
+using System.Text.Json.Serialization;
 
 namespace Covid19DataAPI.Models
 {
@@ -21,7 +22,7 @@ namespace Covid19DataAPI.Models
 
         public DateTime CreatedDate { get; set; } = DateTime.Now;
 
-        // Navigation property
-        public virtual ICollection<CovidCase> CovidCases { get; set; } = new List<CovidCase>();
+        [JsonIgnore] // Prevent circular reference in JSON
+        public List<CovidCase> CovidCases { get; set; } = new();
     }
 }

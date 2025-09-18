@@ -1,6 +1,5 @@
 ﻿using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
-using Covid19DataAPI.Data;
+using Covid19DataAPI.Services;
 using Covid19DataAPI.Models;
 
 namespace Covid19DataAPI.Controllers
@@ -9,82 +8,61 @@ namespace Covid19DataAPI.Controllers
     [Route("api/[controller]")]
     public class CountriesController : ControllerBase
     {
-        private readonly CovidDbContext _context;
+        private readonly CovidDataLoader _dataLoader;
+        private readonly ILogger<CountriesController> _logger;
 
-        public CountriesController(CovidDbContext context)
+        public CountriesController(CovidDataLoader dataLoader, ILogger<CountriesController> logger)
         {
-            _context = context;
+            _dataLoader = dataLoader;
+            _logger = logger;
         }
 
         [HttpGet]
-        public async Task<ActionResult<List<Country>>> GetAllCountries()
+        public async Task<ActionResult<List<Country>>> GetAll()
         {
             try
             {
-                var countries = await _context.Countries.ToListAsync();
+                await _dataLoader.EnsureDataLoadedAsync();
+                var countries = _dataLoader.GetCountries();
                 return Ok(countries);
             }
             catch (Exception ex)
             {
+                _logger.LogError(ex, "Error getting countries");
                 return StatusCode(500, $"Error: {ex.Message}");
             }
         }
 
         [HttpGet("{id}")]
-        public async Task<ActionResult<Country>> GetCountry(int id)
+        public async Task<ActionResult<Country>> Get(int id)
         {
             try
             {
-                var country = await _context.Countries.FindAsync(id);
-
-                if (country == null)
-                {
-                    return NotFound();
-                }
-
+                await _dataLoader.EnsureDataLoadedAsync();
+                var country = _dataLoader.GetCountry(id);
+                if (country == null) return NotFound();
                 return Ok(country);
             }
             catch (Exception ex)
             {
+                _logger.LogError(ex, "Error getting country {Id}", id);
                 return StatusCode(500, $"Error: {ex.Message}");
             }
         }
 
         [HttpGet("code/{countryCode}")]
-        public async Task<ActionResult<Country>> GetCountryByCode(string countryCode)
+        public async Task<ActionResult<Country>> GetByCode(string countryCode)
         {
             try
             {
-                var country = await _context.Countries
-                    .FirstOrDefaultAsync(c => c.CountryCode == countryCode);
-
-                if (country == null)
-                {
-                    return NotFound();
-                }
-
+                await _dataLoader.EnsureDataLoadedAsync();
+                var country = _dataLoader.GetCountryByCode(countryCode.ToUpper());
+                if (country == null) return NotFound();
                 return Ok(country);
             }
             catch (Exception ex)
             {
-                return StatusCode(500, $"Error: {ex.Message}");
-            }
-        }
-
-        [HttpPost]
-        public async Task<ActionResult<Country>> CreateCountry(Country country)
-        {
-            try
-            {
-                country.CreatedDate = DateTime.Now;
-
-                _context.Countries.Add(country);
-                await _context.SaveChangesAsync();
-
-                return CreatedAtAction(nameof(GetCountry), new { id = country.Id }, country);
-            }
-            catch (Exception ex)
-            {
+                _logger.LogError(ex, "Error getting country by code {CountryCode}", countryCode);
                 return StatusCode(500, $"Error: {ex.Message}");
             }
         }
