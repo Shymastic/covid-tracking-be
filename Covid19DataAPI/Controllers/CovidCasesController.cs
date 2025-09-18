@@ -133,5 +133,7 @@ namespace Covid19DataAPI.Controllers
                 Timestamp = DateTime.Now
             });
         }
+
+
     }
 }

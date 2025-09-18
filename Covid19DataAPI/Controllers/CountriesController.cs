@@ -34,5 +34,7 @@ namespace Covid19DataAPI.Controllers
             var country = CovidDataImporter.GetCountryByCode(countryCode);
             return country == null ? NotFound() : Ok(country);
         }
+
+
     }
 }

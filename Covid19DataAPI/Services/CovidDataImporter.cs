@@ -26,6 +26,39 @@ namespace Covid19DataAPI.Services
             _importSettings = importSettings.Value;
             _httpClient.Timeout = TimeSpan.FromMinutes(5);
         }
+        public static void CalculateDailyChanges()
+        {
+            Console.WriteLine("Calculating daily changes...");
+
+            // Group cases by country and sort by date
+            var casesByCountry = _covidCases
+                .GroupBy(c => c.CountryId)
+                .ToDictionary(g => g.Key, g => g.OrderBy(c => c.ReportDate).ToList());
+
+            foreach (var countryId in casesByCountry.Keys)
+            {
+                var countryCases = casesByCountry[countryId];
+
+                for (int i = 1; i < countryCases.Count; i++)
+                {
+                    var currentCase = countryCases[i];
+                    var previousCase = countryCases[i - 1];
+
+                    // Calculate daily changes
+                    currentCase.DailyConfirmed = Math.Max(0, currentCase.Confirmed - previousCase.Confirmed);
+                    currentCase.DailyDeaths = Math.Max(0, currentCase.Deaths - previousCase.Deaths);
+
+                    // For first day, daily = total
+                    if (i == 1)
+                    {
+                        previousCase.DailyConfirmed = previousCase.Confirmed;
+                        previousCase.DailyDeaths = previousCase.Deaths;
+                    }
+                }
+            }
+
+            Console.WriteLine("Daily changes calculated successfully");
+        }
 
         public async Task<bool> ImportAllDataAsync()
         {
@@ -50,6 +83,12 @@ namespace Covid19DataAPI.Services
 
                 // Import recovered (may fail as this dataset is discontinued)
                 await ImportTimeSeriesAsync(_dataSources.GlobalRecovered, "recovered");
+
+                // Calculate daily changes after all data is imported
+                if (success)
+                {
+                    CalculateDailyChanges();
+                }
 
                 lock (_lockObject)
                 {
@@ -98,9 +137,10 @@ namespace Covid19DataAPI.Services
                 _logger.LogInformation($"Processing {dateColumns.Count} date columns for {dataType}");
 
                 var processedCountries = 0;
+                var countryTracker = new HashSet<string>(); // Track unique countries
 
-                // Read data rows
-                while (await csv.ReadAsync() && processedCountries < _importSettings.MaxCountriesToProcess)
+                // Read data rows - REMOVED country limit here
+                while (await csv.ReadAsync())
                 {
                     try
                     {
@@ -111,6 +151,17 @@ namespace Covid19DataAPI.Services
                         if (string.IsNullOrWhiteSpace(countryName) ||
                             (!string.IsNullOrWhiteSpace(provinceName) && !countryName.Equals("US", StringComparison.OrdinalIgnoreCase)))
                             continue;
+
+                        // Track unique countries but don't limit processing
+                        if (!countryTracker.Contains(countryName))
+                        {
+                            countryTracker.Add(countryName);
+                            processedCountries++;
+
+                            // Only stop if we've reached an extreme limit (safety check)
+                            if (processedCountries > 300) // Increased safety limit
+                                break;
+                        }
 
                         // Ensure country exists
                         if (!_countries.ContainsKey(countryName))
@@ -162,16 +213,15 @@ namespace Covid19DataAPI.Services
                                         existingCase.Deaths = value;
                                         break;
                                     case "recovered":
+                                        // Note: This dataset is deprecated, mostly zeros
                                         existingCase.Recovered = value;
                                         break;
                                 }
 
-                                // Calculate active cases
+                                // Calculate active cases (will be more accurate after daily calculations)
                                 existingCase.Active = Math.Max(0, existingCase.Confirmed - existingCase.Deaths - existingCase.Recovered);
                             }
                         }
-
-                        processedCountries++;
                     }
                     catch (Exception ex)
                     {
@@ -179,7 +229,7 @@ namespace Covid19DataAPI.Services
                     }
                 }
 
-                _logger.LogInformation($"Successfully imported {dataType}: {processedCountries} countries processed");
+                _logger.LogInformation($"Successfully imported {dataType}: {processedCountries} unique countries processed");
                 return true;
             }
             catch (Exception ex)
@@ -303,4 +353,6 @@ namespace Covid19DataAPI.Services
         public int MaxCountriesToProcess { get; set; } = 50;
         public int MaxDaysToImport { get; set; } = 10;
     }
+
+
 }

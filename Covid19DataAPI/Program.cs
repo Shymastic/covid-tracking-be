@@ -1,11 +1,9 @@
-using Microsoft.EntityFrameworkCore;
 using Covid19DataAPI.Data;
 using Covid19DataAPI.Services;
-using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.OData;
-using Microsoft.OData.ModelBuilder;
-using Microsoft.OData.Edm;
-using Covid19DataAPI.Models;
+using Microsoft.AspNetCore.OData.Query;
+using Microsoft.EntityFrameworkCore;
+using System.Text.Json.Serialization;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -15,138 +13,99 @@ builder.Services.Configure<CovidDataSources>(
 builder.Services.Configure<ImportSettings>(
     builder.Configuration.GetSection("ImportSettings"));
 
-// Add services
+builder.Services.AddHttpClient();
+builder.Services.AddSingleton<CovidDataImporter>();
+
+// EF Context
+builder.Services.AddDbContext<CovidDbContext>(options =>
+    options.UseInMemoryDatabase("CovidDB"));
+
+// Controllers WITHOUT OData middleware - just regular controllers with OData query support
 builder.Services.AddControllers()
     .AddJsonOptions(options =>
     {
         options.JsonSerializerOptions.ReferenceHandler = ReferenceHandler.IgnoreCycles;
         options.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
         options.JsonSerializerOptions.WriteIndented = true;
-    })
-    .AddOData(options => options
-        .AddRouteComponents("odata", GetEdmModel())
-        .Select()
-        .Filter()
-        .OrderBy()
-        .Expand()
-        .Count()
-        .SetMaxTop(1000)
-        .EnableQueryFeatures());
+    });
 
-// In-memory database for OData compatibility
-builder.Services.AddDbContext<CovidDbContext>(options =>
-    options.UseInMemoryDatabase("CovidDB"));
+// Add OData query support without OData routing middleware
+builder.Services.AddODataQueryFilter();
 
-// Register services
-builder.Services.AddScoped<CovidDataImporter>();
-builder.Services.AddHttpClient();
-
-// Add CORS
+// CORS
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowAll", policy =>
+    options.AddDefaultPolicy(policy =>
     {
-        policy.AllowAnyOrigin()
-              .AllowAnyMethod()
-              .AllowAnyHeader();
+        policy.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader();
     });
 });
 
+// Swagger
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
     c.SwaggerDoc("v1", new()
     {
-        Title = "COVID-19 API with Real CSV Import & OData",
+        Title = "COVID-19 API with OData Query Support",
         Version = "v1",
-        Description = "Complete COVID-19 API with configurable CSV import from GitHub and full OData support"
+        Description = "COVID-19 data API with REST endpoints and OData query features ($filter, $orderby, $select)"
     });
-
-    c.ResolveConflictingActions(apiDescriptions => apiDescriptions.First());
 });
 
 var app = builder.Build();
 
-// Configure pipeline
-if (app.Environment.IsDevelopment())
+// Middleware pipeline - NO OData middleware
+app.UseSwagger();
+app.UseSwaggerUI(c =>
 {
-    app.UseSwagger();
-    app.UseSwaggerUI(c =>
-    {
-        c.SwaggerEndpoint("/swagger/v1/swagger.json", "COVID-19 API");
-        c.RoutePrefix = "";
-    });
-}
+    c.SwaggerEndpoint("/swagger/v1/swagger.json", "COVID-19 API v1");
+    c.RoutePrefix = "";
+    c.DocumentTitle = "COVID-19 API Documentation";
+});
 
-app.UseCors("AllowAll");
+app.UseCors();
 app.UseRouting();
-app.UseAuthorization();
 app.MapControllers();
 
-// Seed database with imported data for OData
+// Seed data
 using (var scope = app.Services.CreateScope())
 {
-    try
-    {
-        var context = scope.ServiceProvider.GetRequiredService<CovidDbContext>();
-        var importer = scope.ServiceProvider.GetRequiredService<CovidDataImporter>();
+    var importer = scope.ServiceProvider.GetRequiredService<CovidDataImporter>();
+    var context = scope.ServiceProvider.GetRequiredService<CovidDbContext>();
 
-        // Import CSV data first
-        var success = await importer.ImportAllDataAsync();
+    Console.WriteLine("Importing data...");
+    await importer.ImportAllDataAsync();
 
-        if (success)
-        {
-            // Populate EF context for OData
-            var countries = CovidDataImporter.GetCountries();
-            var cases = CovidDataImporter.GetCovidCases(0, int.MaxValue);
+    var countries = CovidDataImporter.GetCountries();
+    var cases = CovidDataImporter.GetCovidCases(0, int.MaxValue);
 
-            context.Countries.AddRange(countries);
-            context.CovidCases.AddRange(cases);
-            await context.SaveChangesAsync();
+    context.Countries.AddRange(countries);
+    context.CovidCases.AddRange(cases);
+    await context.SaveChangesAsync();
 
-            Console.WriteLine($"? Data imported: {countries.Count} countries, {cases.Count} cases");
-        }
-        else
-        {
-            Console.WriteLine("? Data import failed");
-        }
-    }
-    catch (Exception ex)
-    {
-        Console.WriteLine($"? Setup failed: {ex.Message}");
-    }
+    Console.WriteLine($"Data seeded: {countries.Count} countries, {cases.Count} cases");
 }
 
 Console.WriteLine("=".PadRight(70, '='));
-Console.WriteLine("COVID-19 API with OData Support");
+Console.WriteLine("COVID-19 API Server Started");
 Console.WriteLine("=".PadRight(70, '='));
-Console.WriteLine($"Swagger UI: http://localhost:5129");
-Console.WriteLine($"OData Metadata: http://localhost:5129/odata/$metadata");
-Console.WriteLine($"Countries: http://localhost:5129/odata/Countries");
-Console.WriteLine($"Covid Cases: http://localhost:5129/odata/CovidCases");
+Console.WriteLine($"?? Homepage (Swagger): http://localhost:5129");
+Console.WriteLine($"?? REST API: http://localhost:5129/api/countries");
+Console.WriteLine($"?? OData-style queries: http://localhost:5129/odata/Countries");
 Console.WriteLine("=".PadRight(70, '='));
-Console.WriteLine("OData Examples:");
-Console.WriteLine("GET /odata/Countries?$filter=Region eq 'Asia'");
-Console.WriteLine("GET /odata/CovidCases?$orderby=Confirmed desc&$top=10");
-Console.WriteLine("GET /odata/CovidCases?$expand=Country");
+Console.WriteLine("Available Endpoints:");
+Console.WriteLine("REST API:");
+Console.WriteLine("  GET /api/countries");
+Console.WriteLine("  GET /api/covidcases");
+Console.WriteLine("  POST /api/covidcases/import");
+Console.WriteLine("");
+Console.WriteLine("OData-style Query API:");
+Console.WriteLine("  GET /odata/Countries");
+Console.WriteLine("  GET /odata/CovidCases");
+Console.WriteLine("  GET /odata/Countries?$filter=Region eq 'Asia'");
+Console.WriteLine("  GET /odata/CovidCases?$orderby=Confirmed desc&$top=10");
+Console.WriteLine("  GET /odata/Countries?$select=CountryName,Population");
 Console.WriteLine("=".PadRight(70, '='));
 
 app.Run();
-
-static IEdmModel GetEdmModel()
-{
-    var builder = new ODataConventionModelBuilder();
-
-    // Configure Countries entity set
-    var countries = builder.EntitySet<Country>("Countries");
-    countries.EntityType.HasKey(c => c.Id);
-
-    // Configure CovidCases entity set  
-    var covidCases = builder.EntitySet<CovidCase>("CovidCases");
-    covidCases.EntityType.HasKey(c => c.Id);
-
-    // Configure relationship
-    covidCases.EntityType.HasRequired(c => c.Country);
-
-    return builder.GetEdmModel();
-}
