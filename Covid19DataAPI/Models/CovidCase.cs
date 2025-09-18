@@ -1,5 +1,4 @@
 ﻿using System.ComponentModel.DataAnnotations;
-using System.Text.Json.Serialization;
 
 namespace Covid19DataAPI.Models
 {
@@ -24,7 +23,6 @@ namespace Covid19DataAPI.Models
 
         public long DailyDeaths { get; set; }
 
-        // Navigation property
         public Country? Country { get; set; }
     }
 }

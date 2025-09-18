@@ -22,7 +22,7 @@ namespace Covid19DataAPI.Models
 
         public DateTime CreatedDate { get; set; } = DateTime.Now;
 
-        [JsonIgnore] // Prevent circular reference in JSON
+        [JsonIgnore]
         public List<CovidCase> CovidCases { get; set; } = new();
     }
 }

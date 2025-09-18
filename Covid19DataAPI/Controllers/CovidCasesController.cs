@@ -8,148 +8,130 @@ namespace Covid19DataAPI.Controllers
     [Route("api/[controller]")]
     public class CovidCasesController : ControllerBase
     {
-        private readonly CovidDataLoader _dataLoader;
-        private readonly ILogger<CovidCasesController> _logger;
+        private readonly CovidDataImporter _importer;
 
-        public CovidCasesController(CovidDataLoader dataLoader, ILogger<CovidCasesController> logger)
+        public CovidCasesController(CovidDataImporter importer)
         {
-            _dataLoader = dataLoader;
-            _logger = logger;
+            _importer = importer;
         }
 
         [HttpGet]
-        public async Task<ActionResult<List<object>>> GetAll([FromQuery] int skip = 0, [FromQuery] int take = 50)
+        public ActionResult<List<object>> GetAll([FromQuery] int skip = 0, [FromQuery] int take = 50)
         {
-            try
-            {
-                await _dataLoader.EnsureDataLoadedAsync();
-                var cases = _dataLoader.GetCovidCases(skip, Math.Min(take, 100));
+            var cases = CovidDataImporter.GetCovidCases(skip, Math.Min(take, 100));
 
-                // Map to include country info without circular reference
-                var result = cases.Select(c => new
-                {
-                    c.Id,
-                    c.CountryId,
-                    c.ReportDate,
-                    c.Confirmed,
-                    c.Deaths,
-                    c.Recovered,
-                    c.Active,
-                    c.DailyConfirmed,
-                    c.DailyDeaths,
-                    Country = new
-                    {
-                        _dataLoader.GetCountry(c.CountryId)?.Id,
-                        _dataLoader.GetCountry(c.CountryId)?.CountryCode,
-                        _dataLoader.GetCountry(c.CountryId)?.CountryName,
-                        _dataLoader.GetCountry(c.CountryId)?.Region,
-                        _dataLoader.GetCountry(c.CountryId)?.Population
-                    }
-                }).ToList();
-
-                return Ok(result);
-            }
-            catch (Exception ex)
+            var result = cases.Select(c => new
             {
-                _logger.LogError(ex, "Error getting COVID cases");
-                return StatusCode(500, $"Error: {ex.Message}");
-            }
+                c.Id,
+                c.CountryId,
+                c.ReportDate,
+                c.Confirmed,
+                c.Deaths,
+                c.Recovered,
+                c.Active,
+                c.DailyConfirmed,
+                c.DailyDeaths,
+                Country = CovidDataImporter.GetCountry(c.CountryId)
+            }).ToList();
+
+            return Ok(result);
         }
 
         [HttpGet("{id}")]
-        public async Task<ActionResult<object>> Get(long id)
+        public ActionResult<object> Get(long id)
         {
-            try
+            var covidCase = CovidDataImporter.GetCovidCase(id);
+            if (covidCase == null) return NotFound();
+
+            return Ok(new
             {
-                await _dataLoader.EnsureDataLoadedAsync();
-                var covidCase = _dataLoader.GetCovidCase(id);
-
-                if (covidCase == null) return NotFound();
-
-                var country = _dataLoader.GetCountry(covidCase.CountryId);
-
-                var result = new
-                {
-                    covidCase.Id,
-                    covidCase.CountryId,
-                    covidCase.ReportDate,
-                    covidCase.Confirmed,
-                    covidCase.Deaths,
-                    covidCase.Recovered,
-                    covidCase.Active,
-                    covidCase.DailyConfirmed,
-                    covidCase.DailyDeaths,
-                    Country = country == null ? null : new
-                    {
-                        country.Id,
-                        country.CountryCode,
-                        country.CountryName,
-                        country.Region,
-                        country.Population
-                    }
-                };
-
-                return Ok(result);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error getting COVID case {Id}", id);
-                return StatusCode(500, $"Error: {ex.Message}");
-            }
-        }
-
-        [HttpGet("country/{countryCode}")]
-        public async Task<ActionResult<List<CovidCase>>> GetByCountry(string countryCode)
-        {
-            try
-            {
-                await _dataLoader.EnsureDataLoadedAsync();
-                var cases = _dataLoader.GetCovidCasesByCountry(countryCode.ToUpper());
-                return Ok(cases);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error getting cases for country {CountryCode}", countryCode);
-                return StatusCode(500, $"Error: {ex.Message}");
-            }
+                covidCase.Id,
+                covidCase.CountryId,
+                covidCase.ReportDate,
+                covidCase.Confirmed,
+                covidCase.Deaths,
+                covidCase.Recovered,
+                covidCase.Active,
+                Country = CovidDataImporter.GetCountry(covidCase.CountryId)
+            });
         }
 
         [HttpGet("summary")]
-        public async Task<ActionResult<object>> GetSummary([FromQuery] DateTime? date = null)
+        public ActionResult<object> GetSummary([FromQuery] DateTime? date = null)
         {
-            try
+            var targetDate = date ?? DateTime.Today.AddDays(-1);
+            var cases = CovidDataImporter.GetCovidCasesByDate(targetDate);
+
+            if (!cases.Any())
             {
-                await _dataLoader.EnsureDataLoadedAsync();
-                var summary = _dataLoader.GetGlobalSummary(date);
-                return Ok(summary);
+                return Ok(new
+                {
+                    message = "No data found",
+                    date = targetDate,
+                    totalCountries = CovidDataImporter.GetCountries().Count,
+                    suggestion = "Try a different date or run POST /api/covidcases/import first"
+                });
             }
-            catch (Exception ex)
+
+            var totalConfirmed = cases.Sum(c => c.Confirmed);
+            var totalDeaths = cases.Sum(c => c.Deaths);
+            var totalRecovered = cases.Sum(c => c.Recovered);
+
+            return Ok(new
             {
-                _logger.LogError(ex, "Error getting summary");
-                return StatusCode(500, $"Error: {ex.Message}");
-            }
+                ReportDate = targetDate,
+                TotalConfirmed = totalConfirmed,
+                TotalDeaths = totalDeaths,
+                TotalRecovered = totalRecovered,
+                TotalActive = cases.Sum(c => c.Active),
+                CountriesReporting = cases.Count,
+                MortalityRate = totalConfirmed > 0 ? (double)totalDeaths / totalConfirmed * 100 : 0
+            });
         }
 
         [HttpGet("treemap/{date}")]
-        public async Task<ActionResult<List<object>>> GetTreemapData(DateTime date)
+        public ActionResult<List<object>> GetTreemapData(DateTime date)
         {
-            try
-            {
-                await _dataLoader.EnsureDataLoadedAsync();
-                var data = _dataLoader.GetTreemapData(date);
+            var cases = CovidDataImporter.GetCovidCasesByDate(date);
+            if (!cases.Any()) return NotFound($"No data found for {date:yyyy-MM-dd}");
 
-                if (!data.Any())
-                {
-                    return NotFound($"No data found for date {date:yyyy-MM-dd}");
-                }
+            var totalConfirmed = cases.Sum(c => c.Confirmed);
 
-                return Ok(data);
-            }
-            catch (Exception ex)
+            var result = cases
+                .Where(c => c.Confirmed > 0)
+                .OrderByDescending(c => c.Confirmed)
+                .Take(20)
+                .Select(c => {
+                    var country = CovidDataImporter.GetCountry(c.CountryId);
+                    return new
+                    {
+                        CountryName = country?.CountryName ?? "Unknown",
+                        CountryCode = country?.CountryCode ?? "UN",
+                        Region = country?.Region ?? "Unknown",
+                        c.Confirmed,
+                        c.Deaths,
+                        c.Recovered,
+                        c.Active,
+                        PercentOfGlobal = totalConfirmed > 0 ? (double)c.Confirmed / totalConfirmed * 100 : 0,
+                        MortalityRate = c.Confirmed > 0 ? (double)c.Deaths / c.Confirmed * 100 : 0
+                    };
+                }).ToList();
+
+            return Ok(result);
+        }
+
+        [HttpPost("import")]
+        public async Task<ActionResult> ImportData()
+        {
+            var success = await _importer.ImportAllDataAsync();
+            return Ok(new
             {
-                _logger.LogError(ex, "Error getting treemap data for {Date}", date);
-                return StatusCode(500, $"Error: {ex.Message}");
-            }
+                Success = success,
+                Message = success ? "Data imported successfully" : "Import failed - check logs",
+                Countries = CovidDataImporter.GetCountries().Count,
+                Cases = CovidDataImporter.GetCovidCases(0, int.MaxValue).Count,
+                Timestamp = DateTime.Now
+            });
         }
     }
 }
