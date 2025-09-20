@@ -301,6 +301,7 @@ namespace Covid19DataAPI.Services
             "Canada" => "CA",
             "India" => "IN",
             "Brazil" => "BR",
+            "Brunei" => "BN",  // Fixed: was BR, now BN
             "Russia" => "RU",
             "France" => "FR",
             "United Kingdom" => "GB",
@@ -327,8 +328,61 @@ namespace Covid19DataAPI.Services
             "South Korea" => "KR",
             "Taiwan" => "TW",
             "Myanmar" => "MM",
-            _ => countryName.Length >= 2 ? countryName[..2].ToUpper() : "UN"
+            "Angola" => "AO",  // Fixed: was AN, now AO
+            "Andorra" => "AD", // Fixed: was AN, now AD
+            "Australia" => "AU",
+            "Austria" => "AT",
+            "Bangladesh" => "BD",
+            "Belgium" => "BE",
+            "Bulgaria" => "BG",
+            "Chile" => "CL",
+            "Colombia" => "CO",
+            "Croatia" => "HR",
+            "Czech Republic" or "Czechia" => "CZ",
+            "Denmark" => "DK",
+            "Egypt" => "EG",
+            "Ethiopia" => "ET",
+            "Finland" => "FI",
+            "Greece" => "GR",
+            "Hungary" => "HU",
+            "Iraq" => "IQ",
+            "Ireland" => "IE",
+            "Israel" => "IL",
+            "Jordan" => "JO",
+            "Kenya" => "KE",
+            "Kuwait" => "KW",
+            "Lebanon" => "LB",
+            "Libya" => "LY",
+            "Lithuania" => "LT",
+            "Luxembourg" => "LU",
+            "Nepal" => "NP",
+            "New Zealand" => "NZ",
+            "Nigeria" => "NG",
+            "Norway" => "NO",
+            "Peru" => "PE",
+            "Portugal" => "PT",
+            "Qatar" => "QA",
+            "Romania" => "RO",
+            "Serbia" => "RS",
+            "Singapore" => "SG",
+            "Slovakia" => "SK",
+            "Slovenia" => "SI",
+            "Sweden" => "SE",
+            "Switzerland" => "CH",
+            "Tunisia" => "TN",
+            "United Arab Emirates" => "AE",
+            "Venezuela" => "VE",
+            "Zimbabwe" => "ZW",
+            _ => GenerateUniqueCode(countryName)
         };
+
+        private string GenerateUniqueCode(string countryName)
+        {
+            // Use first 2 characters + hash for uniqueness
+            var baseCode = countryName.Length >= 2 ? countryName[..2].ToUpper() : "XX";
+            var hash = Math.Abs(countryName.GetHashCode()) % 100;
+            return $"{baseCode}{hash:D2}"; // Example: "XX01", "YY99"
+        }
 
         private string GetRegion(string countryName) => countryName switch
         {
