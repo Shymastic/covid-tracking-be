@@ -60,9 +60,13 @@ namespace Covid19DataAPI.Services
             Console.WriteLine("Daily changes calculated successfully");
         }
 
+        // Add this method to CovidDataImporter.cs after ImportAllDataAsync
+
+        // Add this method to CovidDataImporter.cs after ImportAllDataAsync
+
         public static void FixRecoveredData()
         {
-            Console.WriteLine("Fixing recovered data - using last known values...");
+            Console.WriteLine("Fixing recovered data - using absolute maximum values...");
 
             // Group cases by country
             var casesByCountry = _covidCases
@@ -72,49 +76,66 @@ namespace Covid19DataAPI.Services
             foreach (var countryId in casesByCountry.Keys)
             {
                 var countryCases = casesByCountry[countryId];
-                long lastKnownRecovered = 0;
 
-                // Find the maximum recovered value for this country
-                var maxRecovered = countryCases.Max(c => c.Recovered);
+                // Find the ABSOLUTE maximum recovered value for this country across ALL dates
+                var absoluteMaxRecovered = countryCases.Max(c => c.Recovered);
 
-                // If we have some recovered data, use it
-                if (maxRecovered > 0)
+                Console.WriteLine($"Country {countryId}: Absolute max recovered = {absoluteMaxRecovered}");
+
+                // If we have recovered data, find the peak and maintain it
+                if (absoluteMaxRecovered > 0)
+                {
+                    bool peakReached = false;
+                    long peakRecovered = 0;
+
+                    foreach (var case_ in countryCases)
+                    {
+                        // Check if this is the peak value
+                        if (case_.Recovered == absoluteMaxRecovered)
+                        {
+                            peakReached = true;
+                            peakRecovered = absoluteMaxRecovered;
+                        }
+
+                        // If we haven't reached peak yet, use current value (if > 0)
+                        if (!peakReached && case_.Recovered > 0)
+                        {
+                            peakRecovered = Math.Max(peakRecovered, case_.Recovered);
+                        }
+
+                        // Use peak value for this date
+                        if (peakReached || case_.Recovered > 0)
+                        {
+                            case_.Recovered = Math.Min(peakRecovered, case_.Confirmed - case_.Deaths);
+                        }
+
+                        // If we reached the absolute peak, use that for all subsequent dates
+                        if (peakReached)
+                        {
+                            case_.Recovered = Math.Min(absoluteMaxRecovered, case_.Confirmed - case_.Deaths);
+                        }
+
+                        // Recalculate active cases
+                        case_.Active = Math.Max(0, case_.Confirmed - case_.Deaths - case_.Recovered);
+                    }
+                }
+                // If no recovered data at all, estimate based on mortality rate
+                else
                 {
                     foreach (var case_ in countryCases)
                     {
-                        // If current recovered > 0, update last known
-                        if (case_.Recovered > 0)
+                        if (case_.Confirmed > 1000) // Only for countries with significant cases
                         {
-                            lastKnownRecovered = case_.Recovered;
-                        }
-                        // If current recovered = 0 but we have last known, use it
-                        else if (case_.Recovered == 0 && lastKnownRecovered > 0)
-                        {
-                            // Use last known recovered, but don't exceed confirmed cases
-                            case_.Recovered = Math.Min(lastKnownRecovered, case_.Confirmed - case_.Deaths);
-
-                            // Recalculate active cases
-                            case_.Active = Math.Max(0, case_.Confirmed - case_.Deaths - case_.Recovered);
-                        }
-                    }
-                }
-                // If no recovered data at all, estimate for recent data
-                else
-                {
-                    foreach (var case_ in countryCases.TakeLast(30)) // Last 30 days
-                    {
-                        if (case_.Confirmed > 0 && case_.Deaths > 0)
-                        {
-                            // Estimate recovered as 85% of (Confirmed - Deaths) for recent data
-                            var estimatedRecovered = (long)((case_.Confirmed - case_.Deaths) * 0.85);
-                            case_.Recovered = Math.Max(0, estimatedRecovered);
+                            // Estimate recovered as 90% of (Confirmed - Deaths) for countries without data
+                            var estimatedRecovered = (long)((case_.Confirmed - case_.Deaths) * 0.90);
+                            case_.Recovered = Math.Max(0, Math.Min(estimatedRecovered, case_.Confirmed - case_.Deaths));
                             case_.Active = Math.Max(0, case_.Confirmed - case_.Deaths - case_.Recovered);
                         }
                     }
                 }
             }
 
-            Console.WriteLine("Recovered data fixed successfully");
+            Console.WriteLine("Recovered data fixed using absolute maximum values");
         }
 
         // Update the main ImportAllDataAsync method to call this fix
