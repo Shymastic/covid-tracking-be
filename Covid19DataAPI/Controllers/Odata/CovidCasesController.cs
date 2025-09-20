@@ -20,7 +20,7 @@ namespace Covid19DataAPI.Controllers.OData
         }
 
         // GET /odata/CovidCases
-        [EnableQuery(PageSize = 2000, MaxTop = 2000)]
+        [EnableQuery(PageSize = 200, MaxTop = 1000)]
         public IQueryable<CovidCase> Get()
         {
             _logger.LogInformation($"OData CovidCases GET - Total: {_context.CovidCases.Count()}");

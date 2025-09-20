@@ -136,10 +136,11 @@ namespace Covid19DataAPI.Services
 
                 _logger.LogInformation($"Processing {dateColumns.Count} date columns for {dataType}");
 
-                var processedCountries = 0;
-                var countryTracker = new HashSet<string>(); // Track unique countries
+                // Dictionary to aggregate province/state data by country
+                var countryAggregation = new Dictionary<string, Dictionary<DateTime, long>>();
+                var processedCountries = new HashSet<string>();
 
-                // Read data rows - REMOVED country limit here
+                // Read data rows
                 while (await csv.ReadAsync())
                 {
                     try
@@ -147,38 +148,18 @@ namespace Covid19DataAPI.Services
                         var countryName = csv.GetField("Country/Region")?.Trim();
                         var provinceName = csv.GetField("Province/State")?.Trim();
 
-                        // Skip if no country name or if it's a province/state (except for aggregated data)
-                        if (string.IsNullOrWhiteSpace(countryName) ||
-                            (!string.IsNullOrWhiteSpace(provinceName) && !countryName.Equals("US", StringComparison.OrdinalIgnoreCase)))
+                        // Skip if no country name
+                        if (string.IsNullOrWhiteSpace(countryName))
                             continue;
 
-                        // Track unique countries but don't limit processing
-                        if (!countryTracker.Contains(countryName))
+                        // Normalize country names
+                        countryName = NormalizeCountryName(countryName);
+
+                        // Initialize country aggregation if not exists
+                        if (!countryAggregation.ContainsKey(countryName))
                         {
-                            countryTracker.Add(countryName);
-                            processedCountries++;
-
-                            // Only stop if we've reached an extreme limit (safety check)
-                            if (processedCountries > 300) // Increased safety limit
-                                break;
+                            countryAggregation[countryName] = new Dictionary<DateTime, long>();
                         }
-
-                        // Ensure country exists
-                        if (!_countries.ContainsKey(countryName))
-                        {
-                            var country = new Country
-                            {
-                                Id = _countries.Count + 1,
-                                CountryCode = GetCountryCode(countryName),
-                                CountryName = countryName,
-                                Region = GetRegion(countryName),
-                                Population = GetPopulation(countryName),
-                                CreatedDate = DateTime.Now
-                            };
-                            _countries[countryName] = country;
-                        }
-
-                        var countryObj = _countries[countryName];
 
                         // Process each date column
                         foreach (var dateColumn in dateColumns)
@@ -188,40 +169,16 @@ namespace Covid19DataAPI.Services
 
                             if (long.TryParse(valueStr, out long value) && value >= 0)
                             {
-                                // Find or create COVID case record
-                                var existingCase = _covidCases
-                                    .FirstOrDefault(c => c.CountryId == countryObj.Id && c.ReportDate.Date == reportDate.Date);
-
-                                if (existingCase == null)
+                                // Aggregate values by country (sum provinces/states)
+                                if (!countryAggregation[countryName].ContainsKey(reportDate))
                                 {
-                                    existingCase = new CovidCase
-                                    {
-                                        Id = _covidCases.Count + 1,
-                                        CountryId = countryObj.Id,
-                                        ReportDate = reportDate
-                                    };
-                                    _covidCases.Add(existingCase);
+                                    countryAggregation[countryName][reportDate] = 0;
                                 }
-
-                                // Update based on data type
-                                switch (dataType.ToLower())
-                                {
-                                    case "confirmed":
-                                        existingCase.Confirmed = value;
-                                        break;
-                                    case "deaths":
-                                        existingCase.Deaths = value;
-                                        break;
-                                    case "recovered":
-                                        // Note: This dataset is deprecated, mostly zeros
-                                        existingCase.Recovered = value;
-                                        break;
-                                }
-
-                                // Calculate active cases (will be more accurate after daily calculations)
-                                existingCase.Active = Math.Max(0, existingCase.Confirmed - existingCase.Deaths - existingCase.Recovered);
+                                countryAggregation[countryName][reportDate] += value;
                             }
                         }
+
+                        processedCountries.Add(countryName);
                     }
                     catch (Exception ex)
                     {
@@ -229,7 +186,70 @@ namespace Covid19DataAPI.Services
                     }
                 }
 
-                _logger.LogInformation($"Successfully imported {dataType}: {processedCountries} unique countries processed");
+                // Now create Country and CovidCase objects from aggregated data
+                foreach (var countryEntry in countryAggregation)
+                {
+                    var countryName = countryEntry.Key;
+                    var countryData = countryEntry.Value;
+
+                    // Ensure country exists
+                    if (!_countries.ContainsKey(countryName))
+                    {
+                        var country = new Country
+                        {
+                            Id = _countries.Count + 1,
+                            CountryCode = GetCountryCode(countryName),
+                            CountryName = countryName,
+                            Region = GetRegion(countryName),
+                            Population = GetPopulation(countryName),
+                            CreatedDate = DateTime.Now
+                        };
+                        _countries[countryName] = country;
+                    }
+
+                    var countryObj = _countries[countryName];
+
+                    // Create CovidCase records for each date
+                    foreach (var dateData in countryData)
+                    {
+                        var reportDate = dateData.Key;
+                        var aggregatedValue = dateData.Value;
+
+                        // Find or create COVID case record
+                        var existingCase = _covidCases
+                            .FirstOrDefault(c => c.CountryId == countryObj.Id && c.ReportDate.Date == reportDate.Date);
+
+                        if (existingCase == null)
+                        {
+                            existingCase = new CovidCase
+                            {
+                                Id = _covidCases.Count + 1,
+                                CountryId = countryObj.Id,
+                                ReportDate = reportDate
+                            };
+                            _covidCases.Add(existingCase);
+                        }
+
+                        // Update based on data type
+                        switch (dataType.ToLower())
+                        {
+                            case "confirmed":
+                                existingCase.Confirmed = aggregatedValue;
+                                break;
+                            case "deaths":
+                                existingCase.Deaths = aggregatedValue;
+                                break;
+                            case "recovered":
+                                existingCase.Recovered = aggregatedValue;
+                                break;
+                        }
+
+                        // Calculate active cases
+                        existingCase.Active = Math.Max(0, existingCase.Confirmed - existingCase.Deaths - existingCase.Recovered);
+                    }
+                }
+
+                _logger.LogInformation($"Successfully imported {dataType}: {processedCountries.Count} unique countries processed");
                 return true;
             }
             catch (Exception ex)
@@ -237,6 +257,18 @@ namespace Covid19DataAPI.Services
                 _logger.LogError(ex, $"Error importing {dataType} from {url}");
                 return false;
             }
+        }
+
+        private string NormalizeCountryName(string countryName)
+        {
+            return countryName switch
+            {
+                "US" => "United States",
+                "Korea, South" => "South Korea",
+                "Taiwan*" => "Taiwan",
+                "Burma" => "Myanmar",
+                _ => countryName
+            };
         }
 
         // Data access methods
@@ -266,6 +298,7 @@ namespace Covid19DataAPI.Services
         {
             "United States" or "US" => "US",
             "China" => "CN",
+            "Canada" => "CA",
             "India" => "IN",
             "Brazil" => "BR",
             "Russia" => "RU",
@@ -284,7 +317,6 @@ namespace Covid19DataAPI.Services
             "Morocco" => "MA",
             "Saudi Arabia" => "SA",
             "Spain" => "ES",
-            "Canada" => "CA",
             "Argentina" => "AR",
             "Mexico" => "MX",
             "Philippines" => "PH",
@@ -292,6 +324,9 @@ namespace Covid19DataAPI.Services
             "Vietnam" => "VN",
             "Thailand" => "TH",
             "Japan" => "JP",
+            "South Korea" => "KR",
+            "Taiwan" => "TW",
+            "Myanmar" => "MM",
             _ => countryName.Length >= 2 ? countryName[..2].ToUpper() : "UN"
         };
 
@@ -350,7 +385,7 @@ namespace Covid19DataAPI.Services
     public class ImportSettings
     {
         public bool AutoImportOnStartup { get; set; } = true;
-        public int MaxCountriesToProcess { get; set; } = 50;
+        public int MaxCountriesToProcess { get; set; } = 500;
         public int MaxDaysToImport { get; set; } = 10;
     }
 
